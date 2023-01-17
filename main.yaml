@@ -1,0 +1,112 @@
+- hosts: all
+  tasks:
+  - name:  create rke2-artifacts directory
+    file:
+      path: /root/rke2-artifacts
+      state: directory
+
+  - name: Transfer executable script
+    copy:
+      src: /root/sam.sh
+      dest: /root/rke2-artifacts
+      mode: "0777"
+
+  - name: Check if directory exists
+    stat:
+      path: /root/rke2-artifacts
+    register: dir_exists
+
+  - name: Go to the folder and execute command
+    command: chdir=/root/rke2-artifacts ./sam.sh
+
+- hosts: master
+  tasks:
+  - name: Activating rke2 in master
+    copy:
+      src: /root/rkemaster.sh
+      dest: /root
+      mode: "0777"
+
+  - name: Check if file exists
+    stat:
+      path: /root/rkemaster.sh
+    register: file_exists
+
+  - name: Go to the folder and execute command
+    command: chdir=/root ./rkemaster.sh
+
+  - name: Get token from master server
+    shell: cat /var/lib/rancher/rke2/server/node-token
+    register: token
+
+- hosts: worker
+  vars:
+    master_ip: "{{hostvars['host1'].ansible_host}}"
+  tasks:
+  - name: Get token from master
+    set_fact:
+      token: "{{hostvars['host1'].token.stdout}}"
+  - name: Activating rke2 in master
+    copy:
+      src: /root/rke2worker.sh
+      dest: /root
+      mode: "0777"
+  - name: Create RKE2 config directory and file
+    file:
+      path: /etc/rancher/rke2/
+      state: directory
+      mode: '0755'
+    register: rke2_dir
+
+  - name: Create RKE2 config file
+    file:
+      path: /etc/rancher/rke2/config.yaml
+      state: touch
+      mode: '0644'
+    when: rke2_dir.changed
+
+  - name: Add token and server information to worker's token file
+    copy:
+      content: "Server: http://{{master_ip}}:9345\nToken: {{token}}"
+      dest: /etc/rancher/rke2/config.yaml
+
+  - name: Start RKE2 service on the first server
+    ansible.builtin.systemd:
+      name: rke2-agent
+      state: started
+
+- hosts: master
+  tasks:
+  - name: Add commands to ubuntu's bashrc
+    lineinfile:
+      dest: /home/ubuntu/.bashrc
+      state: present
+      line: "{{ item.line }}"
+    with_items:
+      - { line: "export PATH=$PATH:/var/lib/rancher/rke2/bin" }
+      - { line: "export KUBECONFIG=~/.kube/config" }
+      - { line: "export CRI_CONFIG_FILE=/etc/crictl.yaml" }
+      - { line: "export KUBECONFIG=/etc/rancher/rke2/rke2.yaml" }
+      - { line: "export KUBECONFIG=/home/ubuntu/rke2.yaml" }
+    become: yes
+
+
+  - name: Activating rke2 in master
+    copy:
+      src: /root/activate.sh
+      dest: /root
+      mode: "0777"
+
+  - name: Check if file exists
+    stat:
+      path: /root/activate.sh
+    register: file_exists
+
+  - name: adding the script to view kubectl commands
+    command: sh /root /activate.sh
+
+  - name: Set PATH environment variable
+    become: yes
+    become_user: ubuntu
+    become_method: su
+    shell: export PATH="$PATH:/var/lib/rancher/rke2/bin"
